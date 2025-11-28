@@ -9,23 +9,288 @@
 4. **POST /midterm/api/login** - Get JWT token
 
 ### HTTP Methods Used:
-- **GET**: Used to retrieve tasks (safe, idempotent, no data modification)
-- **POST**: Used to add new tasks (creates resource, not idempotent)
-- **DELETE**: Used to remove tasks (destructive, idempotent, restricted)
 
-### JSON Response Structure:
+**GET /tasks**
+We use GET for retrieving tasks because it's designed for fetching data without changing anything on the server. When you want to see what tasks exist, you use GET. It's safe—meaning your request won't accidentally modify the database. It's also idempotent, so hitting the same endpoint multiple times gives you the same result. You can bookmark a GET URL and nothing bad happens.
+
+**POST /tasks**
+We use POST when creating a new task because POST is meant for sending data to the server that creates a new resource. Each time you POST a new task, you get a new entry in the database. This is why it's not idempotent—if you accidentally send the same POST request twice, you'll end up with two identical tasks. That's different from GET, where sending the same request a hundred times just shows you the same data.
+
+**DELETE /tasks/{id}**
+We use DELETE for removing tasks because DELETE is specifically designed for destructive operations—it tells the server "remove this resource." Using DELETE makes it clear in the code and to anyone reading the API that this operation will permanently delete data. It's idempotent because deleting the same task twice is safe—the first request removes it, and the second request just returns "not found" but doesn't cause an error.
+
+### 2. JSON Response Structure & Data Design
+
+**How We Structure Our JSON Responses:**
+
+Every response from our API follows a consistent format with three main parts: a success flag to tell the frontend whether the request worked, a data object containing the actual information, and a message for additional context. This consistent structure makes it easy for the frontend to know exactly where to find information.
+
+When you ask for tasks, here's what you get:
+
 ```json
 {
   "success": true,
+  "message": "Tasks retrieved successfully",
   "data": [
     {
       "id": 1,
       "title": "Review project requirements",
       "completed": false
+    },
+    {
+      "id": 2,
+      "title": "Submit final report",
+      "completed": true
     }
   ]
 }
 ```
+
+**Why This Structure?**
+
+- **success**: The frontend can check this boolean to know if something went wrong without parsing the entire response
+- **message**: Gives the user-friendly description of what happened
+- **data**: Contains the actual task objects with id, title, and completed status
+
+When creating a new task, you get back the newly created task:
+
+```json
+{
+  "success": true,
+  "message": "Task created successfully",
+  "data": {
+    "id": 3,
+    "title": "New task title",
+    "completed": false
+  }
+}
+```
+
+When there's an error, the structure stays the same but success is false:
+
+```json
+{
+  "success": false,
+  "message": "Unauthorized: Missing authentication",
+  "data": null
+}
+```
+
+---
+
+### 3. HTTP Status Codes & When They're Used
+
+**Understanding Status Codes:**
+
+Status codes are like traffic lights for your API. They tell the client what happened with their request at a glance.
+
+**Success Status Codes (200-299):**
+
+**200 OK** - This means the request succeeded and everything is good. We return 200 when:
+- You GET tasks (the request worked, here's your data)
+- You DELETE a task (the deletion happened successfully)
+
+**201 Created** - This is a special success code that says "not only did your request succeed, but a new resource was created on the server." We return 201 when:
+- You POST a new task (the task was successfully added to the database)
+
+**Error Status Codes (400-499):**
+
+**400 Bad Request** - This means the client sent something wrong in their request. We return 400 when:
+- You try to create a task but forget to include the title (missing required data)
+- You send malformed JSON that we can't parse
+- The input data doesn't meet our requirements
+
+**401 Unauthorized** - This means the client needs to authenticate but hasn't provided valid credentials. We return 401 when:
+- You try to view, create, or delete tasks WITHOUT providing an API key or JWT token
+- You provide a token that's invalid or expired
+- The credentials don't match what we have on file
+
+**404 Not Found** - This means the server couldn't find the resource you're asking for. We return 404 when:
+- You try to DELETE task #999 but only tasks 1, 2, and 3 exist
+- The endpoint path doesn't exist
+
+**405 Method Not Allowed** - This means you used the wrong HTTP method. We return 405 when:
+- You try to POST to /tasks/{id} (should use DELETE instead)
+- You try to GET to /login (should use POST)
+
+**Code Example:**
+```php
+// Return 200 for successful GET
+http_response_code(200);
+
+// Return 201 for successfully creating
+http_response_code(201);
+
+// Return 400 for bad data
+http_response_code(400);
+
+// Return 401 for missing authentication
+http_response_code(401);
+
+// Return 404 for not found
+http_response_code(404);
+```
+
+---
+
+### 4. Endpoint Routing Design
+
+**How Routing Works in Our API:**
+
+When a request comes to our API, it goes through several steps to figure out where to send it. Here's the journey:
+
+**Step 1: Parse the Request Path**
+
+First, we look at what the client is asking for. The URL might be `/api/tasks` or `/api/tasks/5`. We extract just the path part and remove extra query parameters.
+
+```php
+// GET request to /api/tasks?debug=1
+// We extract: "tasks"
+
+// DELETE request to /api/tasks/5
+// We extract: "tasks/5"
+```
+
+**Step 2: Determine the HTTP Method**
+
+Next, we check what type of operation they want: GET, POST, or DELETE. This tells us what action to perform.
+
+**Step 3: Match the Pattern & Route to Handler**
+
+This is where the magic happens. We match the path against our endpoint patterns and call the right function:
+
+```php
+// If path is "tasks" and method is "GET"
+→ Call handleGetTasks()
+
+// If path is "tasks" and method is "POST"
+→ Call handlePostTask()
+
+// If path is "tasks/5" and method is "DELETE"
+→ Call handleDeleteTask(5)
+
+// If path is "login" and method is "POST"
+→ Call handleLogin()
+```
+
+**How It's Implemented:**
+
+```php
+$path = parse_url($_SERVER['REQUEST_URI'])['path'];
+$path = str_replace('/midterm/api/', '', $path);
+$method = $_SERVER['REQUEST_METHOD'];
+
+if ($path === 'tasks' && $method === 'GET') {
+    handleGetTasks();
+} elseif ($path === 'tasks' && $method === 'POST') {
+    handlePostTask();
+} elseif (strpos($path, 'tasks/') === 0 && $method === 'DELETE') {
+    handleDeleteTask(substr($path, 6)); // Extract the ID
+} elseif ($path === 'login' && $method === 'POST') {
+    handleLogin();
+}
+```
+
+---
+
+### 5. Separation of Logic (Controller) from Data
+
+**Architecture Overview:**
+
+Our API separates concerns into distinct layers:
+
+**Layer 1: Data Storage**
+
+```php
+// This is our "database" - just an array of tasks
+$tasks = [
+    ["id" => 1, "title" => "Review requirements", "completed" => false],
+    ["id" => 2, "title" => "Write code", "completed" => false],
+    ["id" => 3, "title" => "Test API", "completed" => true]
+];
+```
+
+The data storage is completely separate. If we wanted to switch from an array to a real database like MySQL, we'd only change this part, not the business logic.
+
+**Layer 2: Business Logic (Controllers/Handlers)**
+
+Each handler function contains the logic for what to do:
+
+```php
+function handleGetTasks() {
+    global $tasks;
+    // Logic: Check if user is authenticated
+    if (!authenticateRequest()) {
+        http_response_code(401);
+        echo json_encode(["success" => false, "message" => "Unauthorized"]);
+        return;
+    }
+    // Logic: Return the tasks
+    http_response_code(200);
+    echo json_encode(["success" => true, "data" => $tasks]);
+}
+
+function handlePostTask() {
+    global $tasks;
+    // Logic: Authenticate
+    if (!authenticateRequest()) {
+        http_response_code(401);
+        return;
+    }
+    // Logic: Validate input (title required)
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (empty($input['title'])) {
+        http_response_code(400);
+        echo json_encode(["success" => false, "message" => "Title required"]);
+        return;
+    }
+    // Logic: Create new task
+    $newTask = [
+        "id" => count($tasks) + 1,
+        "title" => $input['title'],
+        "completed" => $input['completed'] ?? false
+    ];
+    $tasks[] = $newTask;
+    http_response_code(201);
+    echo json_encode(["success" => true, "data" => $newTask]);
+}
+```
+
+**Layer 3: Helper Functions**
+
+Functions that do one job really well:
+
+```php
+// Authentication helper - checks credentials
+function authenticateRequest() {
+    $apiKey = $_SERVER['HTTP_X_API_KEY'] ?? null;
+    $token = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+    
+    if ($apiKey === 'bytebride-secret-key-2024') {
+        return true;
+    }
+    if (validateJWT($token)) {
+        return true;
+    }
+    return false;
+}
+
+// JWT validation helper
+function validateJWT($token) {
+    if (!$token) return false;
+    $token = str_replace('Bearer ', '', $token);
+    $parts = explode('.', $token);
+    return count($parts) === 3; // Has 3 parts: header.payload.signature
+}
+```
+
+**Why This Matters:**
+
+- **Data Layer**: Can be swapped out without touching code logic
+- **Handler Layer**: Contains all business rules (who can do what, validation)
+- **Helper Layer**: Reusable functions that multiple handlers can use
+
+If you need to add a database, you only change the $tasks array initialization. If you need to change authentication, you only touch authenticateRequest(). This is clean architecture.
 
 ---
 

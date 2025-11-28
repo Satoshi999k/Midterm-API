@@ -4,36 +4,44 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, x-api-key');
 
-// Handle preflight requests
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
 
-// Define valid API key and JWT secret
 define('API_KEY', 'bytebride-secret-key-2024');
 define('JWT_SECRET', 'bytebride-jwt-secret-2024');
+define('TASKS_FILE', __DIR__ . '/tasks.json');
 
-// Dummy tasks storage (in real app, would use database)
-$tasks = [
-    ['id' => 1, 'title' => 'Review project requirements', 'completed' => false],
-    ['id' => 2, 'title' => 'Set up development environment', 'completed' => true],
-    ['id' => 3, 'title' => 'Create API endpoints', 'completed' => false]
-];
+// Load tasks from JSON file or use default
+function loadTasks() {
+    if (file_exists(TASKS_FILE)) {
+        $json = file_get_contents(TASKS_FILE);
+        $tasks = json_decode($json, true);
+        return is_array($tasks) ? $tasks : getDefaultTasks();
+    }
+    return getDefaultTasks();
+}
 
-// Authentication middleware
+function getDefaultTasks() {
+    return [];
+}
+
+function saveTasks($tasks) {
+    file_put_contents(TASKS_FILE, json_encode($tasks, JSON_PRETTY_PRINT));
+}
+
+$tasks = loadTasks();
+
 function authenticateRequest() {
-    // Check for API key in headers
     if (isset($_SERVER['HTTP_X_API_KEY']) && $_SERVER['HTTP_X_API_KEY'] === API_KEY) {
         return true;
     }
     
-    // Check for JWT token in Authorization header
     if (isset($_SERVER['HTTP_AUTHORIZATION'])) {
         $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
         if (preg_match('/Bearer\s+(.+)/', $authHeader, $matches)) {
             $token = $matches[1];
-            // Simple JWT validation (check if token contains our secret in structure)
             if (validateJWT($token)) {
                 return true;
             }
@@ -43,15 +51,12 @@ function authenticateRequest() {
     return false;
 }
 
-// Simple JWT validation
 function validateJWT($token) {
-    // Split the token into parts
     $parts = explode('.', $token);
     if (count($parts) !== 3) {
         return false;
     }
     
-    // In production, verify signature. Here we do basic check
     $payload = json_decode(base64_decode($parts[1]), true);
     if ($payload && isset($payload['verified'])) {
         return true;
@@ -60,7 +65,6 @@ function validateJWT($token) {
     return false;
 }
 
-// Helper function to generate JWT (for testing purposes)
 function generateJWT() {
     $header = base64_encode(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
     $payload = base64_encode(json_encode(['verified' => true, 'iat' => time()]));
@@ -68,12 +72,10 @@ function generateJWT() {
     return "$header.$payload.$signature";
 }
 
-// Get request method and path
 $method = $_SERVER['REQUEST_METHOD'];
 $path = parse_url($_REQUEST['path'] ?? $_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $path = str_replace('/midterm/api/', '', $path);
 
-// Route handling
 if ($path === 'tasks' || $path === 'tasks/') {
     if ($method === 'GET') {
         handleGetTasks();
@@ -102,7 +104,6 @@ if ($path === 'tasks' || $path === 'tasks/') {
     echo json_encode(['error' => 'Endpoint not found']);
 }
 
-// Handler functions
 function handleGetTasks() {
     global $tasks;
     
@@ -127,22 +128,44 @@ function handlePostTask() {
     
     $data = json_decode(file_get_contents('php://input'), true);
     
+    if (!isset($data['id']) || empty($data['id'])) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Bad request', 'message' => 'ID is required']);
+        return;
+    }
+    
     if (!isset($data['title']) || empty($data['title'])) {
         http_response_code(400);
-        echo json_encode(['error' => 'Bad request', 'message' => 'Title is required']);
+        echo json_encode(['success' => false, 'error' => 'Bad request', 'message' => 'Title is required']);
+        return;
+    }
+    
+    // Check if ID already exists
+    $idExists = false;
+    foreach ($tasks as $task) {
+        if ($task['id'] == $data['id']) {
+            $idExists = true;
+            break;
+        }
+    }
+    
+    if ($idExists) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Bad request', 'message' => 'Task ID already exists']);
         return;
     }
     
     $newTask = [
-        'id' => max(array_column($tasks, 'id')) + 1,
+        'id' => (int)$data['id'],
         'title' => $data['title'],
         'completed' => $data['completed'] ?? false
     ];
     
     $tasks[] = $newTask;
+    saveTasks($tasks);
     
     http_response_code(201);
-    echo json_encode(['success' => true, 'data' => $newTask]);
+    echo json_encode(['success' => true, 'message' => 'Task created successfully', 'data' => $newTask]);
 }
 
 function handleDeleteTask($id) {
@@ -163,18 +186,16 @@ function handleDeleteTask($id) {
     }
     
     $deletedTask = $tasks[$taskIndex];
-    unset($tasks[$taskIndex]);
-    $tasks = array_values($tasks); // Re-index array
+    array_splice($tasks, $taskIndex, 1);
+    saveTasks($tasks);
     
     http_response_code(200);
     echo json_encode(['success' => true, 'message' => 'Task deleted', 'data' => $deletedTask]);
 }
 
 function handleLogin() {
-    // Simple login endpoint that returns a JWT token
     $data = json_decode(file_get_contents('php://input'), true);
     
-    // Accept any non-empty username/password for demo
     if (isset($data['username']) && isset($data['password'])) {
         $token = generateJWT();
         http_response_code(200);
